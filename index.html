@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weekly Planner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #111827; /* bg-gray-900 */
+            color: #f3f4f6; /* text-gray-200 */
+        }
+        /* Custom scrollbar for better aesthetics in dark mode */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1f2937; /* bg-gray-800 */
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4b5563; /* bg-gray-600 */
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280; /* bg-gray-500 */
+        }
+        .task-input:focus, .add-btn:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px #38bdf8; /* focus:ring-2 focus:ring-sky-400 */
+        }
+        .day-card {
+            min-height: 250px;
+        }
+        .loader {
+            border: 4px solid #f3f4f6;
+            border-top: 4px solid #38bdf8;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="h-full antialiased">
+    <div id="loader-container" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+        <div class="loader"></div>
+    </div>
+
+    <main id="app-container" class="p-4 md:p-8 max-w-7xl mx-auto hidden">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-white">Weekly Planner</h1>
+            <p class="text-gray-400 mt-2">Organize your week, build habits, and accomplish your goals.</p>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+            <!-- Weekly Priorities Section -->
+            <section id="weekly-priorities" class="bg-gray-800 p-6 rounded-lg shadow-lg">
+                <h2 class="text-2xl font-semibold mb-4 text-sky-300">Weekly Priorities</h2>
+                <form id="add-priority-form" class="flex gap-2 mb-4">
+                    <input type="text" id="new-priority-input" placeholder="Add a new priority..." class="flex-grow bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition task-input">
+                    <button type="submit" class="bg-sky-600 hover:bg-sky-700 text-white font-semibold px-4 py-2 rounded-md transition add-btn">Add</button>
+                </form>
+                <ul id="priorities-list" class="space-y-3">
+                    <!-- Priorities will be injected here -->
+                </ul>
+            </section>
+
+            <!-- Habit Tracker Section -->
+            <section id="habit-tracker" class="bg-gray-800 p-6 rounded-lg shadow-lg">
+                <h2 class="text-2xl font-semibold mb-4 text-teal-300">Habit Tracker</h2>
+                <form id="add-habit-form" class="flex gap-2 mb-4">
+                    <input type="text" id="new-habit-input" placeholder="Add a new habit..." class="flex-grow bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:ring-2 focus:ring-teal-500 focus:outline-none transition task-input">
+                    <button type="submit" class="bg-teal-600 hover:bg-teal-700 text-white font-semibold px-4 py-2 rounded-md transition add-btn">Add</button>
+                </form>
+                <div id="habits-list" class="overflow-x-auto">
+                     <!-- Habit table will be injected here -->
+                </div>
+            </section>
+        </div>
+
+        <!-- Daily Tasks Section -->
+        <section id="daily-tasks">
+            <h2 class="text-3xl font-bold text-center mb-6 text-white">Daily Tasks</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-4">
+                <!-- Day cards will be injected here -->
+            </div>
+        </section>
+        
+        <footer class="text-center mt-12 text-gray-500">
+            <p>Your User ID (for collaboration): <span id="user-id-display" class="font-mono bg-gray-700 px-2 py-1 rounded"></span></p>
+        </footer>
+    </main>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, collection, onSnapshot, addDoc, updateDoc, deleteDoc, setDoc, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase Configuration ---
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "YOUR_API_KEY", authDomain: "...", projectId: "..." };
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'weekly-planner-app';
+        
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        let userId = null;
+        let prioritiesUnsubscribe = null;
+        let habitsUnsubscribe = null;
+        const dailyUnsubscribes = {};
+
+        const DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+        // --- UI Elements ---
+        const loaderContainer = document.getElementById('loader-container');
+        const appContainer = document.getElementById('app-container');
+        const prioritiesList = document.getElementById('priorities-list');
+        const habitsList = document.getElementById('habits-list');
+        const dailyTasksContainer = document.querySelector('#daily-tasks .grid');
+        
+        // --- Authentication ---
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                userId = user.uid;
+                console.log("User authenticated with UID:", userId);
+                document.getElementById('user-id-display').textContent = userId;
+
+                await initializeUserData();
+                attachAllListeners();
+                
+                loaderContainer.style.display = 'none';
+                appContainer.classList.remove('hidden');
+            }
+        });
+
+        async function authenticateUser() {
+             try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Authentication Error:", error);
+                loaderContainer.innerHTML = `<div class="text-red-400">Authentication failed. Please refresh.</div>`;
+            }
+        }
+        
+        // --- Data Initialization ---
+        async function initializeUserData() {
+            const batch = writeBatch(db);
+            const daysCollectionRef = collection(db, 'artifacts', appId, 'users', userId, 'daily_planner');
+            
+            for (const day of DAYS_OF_WEEK) {
+                const dayDocRef = doc(daysCollectionRef, day);
+                const dayDoc = await getDoc(dayDocRef);
+                if (!dayDoc.exists()) {
+                    batch.set(dayDocRef, { tasks: [] });
+                }
+            }
+            await batch.commit();
+        }
+
+        // --- Firestore Path Helpers ---
+        const getPrioritiesCol = () => collection(db, 'artifacts', appId, 'users', userId, 'weekly_priorities');
+        const getHabitsCol = () => collection(db, 'artifacts', appId, 'users', userId, 'habits');
+        const getDailyPlannerCol = () => collection(db, 'artifacts', appId, 'users', userId, 'daily_planner');
+
+        // --- Event Listeners ---
+        function attachAllListeners() {
+            // Unsubscribe from old listeners if they exist
+            if (prioritiesUnsubscribe) prioritiesUnsubscribe();
+            if (habitsUnsubscribe) habitsUnsubscribe();
+            Object.values(dailyUnsubscribes).forEach(unsub => unsub());
+
+            // Priorities
+            prioritiesUnsubscribe = onSnapshot(getPrioritiesCol(), (snapshot) => {
+                const priorities = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderPriorities(priorities);
+            });
+
+            // Habits
+            habitsUnsubscribe = onSnapshot(getHabitsCol(), (snapshot) => {
+                const habits = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderHabits(habits);
+            });
+            
+            // Daily Tasks
+            DAYS_OF_WEEK.forEach(day => {
+                const dayDocRef = doc(getDailyPlannerCol(), day);
+                dailyUnsubscribes[day] = onSnapshot(dayDocRef, (doc) => {
+                    if(doc.exists()){
+                       renderDailyTasks(day, doc.data().tasks || []);
+                    }
+                });
+            });
+        }
+        
+        // --- Render Functions ---
+        const createIconButton = (iconSvg, ariaLabel, clickHandler) => {
+            const button = document.createElement('button');
+            button.className = 'text-gray-400 hover:text-white transition';
+            button.setAttribute('aria-label', ariaLabel);
+            button.innerHTML = iconSvg;
+            button.onclick = clickHandler;
+            return button;
+        };
+
+        const editIcon = `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" /><path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clip-rule="evenodd" /></svg>`;
+        const deleteIcon = `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clip-rule="evenodd" /></svg>`;
+
+        function renderPriorities(priorities) {
+            prioritiesList.innerHTML = '';
+            if (priorities.length === 0) {
+                prioritiesList.innerHTML = `<li class="text-gray-400 text-center py-4">No weekly priorities yet.</li>`;
+                return;
+            }
+            priorities.forEach(p => {
+                const li = document.createElement('li');
+                li.className = 'flex items-center gap-3 bg-gray-700 p-3 rounded-md';
+                li.innerHTML = `
+                    <input type="checkbox" ${p.completed ? 'checked' : ''} class="h-5 w-5 rounded bg-gray-600 border-gray-500 text-sky-500 focus:ring-sky-500">
+                    <span class="flex-grow text-white ${p.completed ? 'line-through text-gray-400' : ''}">${p.text}</span>
+                `;
+
+                const checkbox = li.querySelector('input[type="checkbox"]');
+                checkbox.addEventListener('change', () => updateDoc(doc(getPrioritiesCol(), p.id), { completed: checkbox.checked }));
+                
+                const textSpan = li.querySelector('span');
+
+                const editButton = createIconButton(editIcon, 'Edit priority', () => {
+                     li.innerHTML = `
+                        <input type="text" value="${p.text}" class="flex-grow bg-gray-600 text-white rounded-md px-3 py-1 border border-gray-500 task-input">
+                        <button class="text-sky-400 hover:text-sky-300 font-semibold">Save</button>
+                    `;
+                    const input = li.querySelector('input');
+                    input.focus();
+                    const saveButton = li.querySelector('button');
+                    saveButton.onclick = () => updateDoc(doc(getPrioritiesCol(), p.id), { text: input.value });
+                    input.onkeydown = (e) => { if (e.key === 'Enter') saveButton.click(); };
+                });
+                const deleteButton = createIconButton(deleteIcon, 'Delete priority', () => deleteDoc(doc(getPrioritiesCol(), p.id)));
+
+                const buttonWrapper = document.createElement('div');
+                buttonWrapper.className = 'flex items-center gap-3 ml-auto';
+                buttonWrapper.appendChild(editButton);
+                buttonWrapper.appendChild(deleteButton);
+                
+                li.appendChild(buttonWrapper);
+                prioritiesList.appendChild(li);
+            });
+        }
+        
+        function renderHabits(habits) {
+            if (habits.length === 0) {
+                habitsList.innerHTML = `<p class="text-gray-400 text-center py-4">No habits being tracked yet.</p>`;
+                return;
+            }
+
+            const dayHeaders = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+            const dayKeys = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+
+            let tableHTML = `
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="border-b border-gray-600">
+                            <th class="p-2 text-sm font-semibold text-gray-300">Habit</th>
+                            ${dayHeaders.map(h => `<th class="p-2 text-center text-sm font-semibold text-gray-300">${h}</th>`).join('')}
+                            <th class="p-2 text-sm font-semibold text-gray-300"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            habits.forEach(habit => {
+                tableHTML += `<tr class="border-b border-gray-700" data-id="${habit.id}">`;
+                
+                // Habit name with edit functionality
+                tableHTML += `<td class="p-2 text-white habit-name-cell">${habit.name}</td>`;
+                
+                // Checkboxes for each day
+                tableHTML += dayKeys.map(dayKey => {
+                    const isChecked = habit.tracking && habit.tracking[dayKey];
+                    return `<td class="p-2 text-center"><input type="checkbox" data-day="${dayKey}" ${isChecked ? 'checked' : ''} class="h-5 w-5 rounded bg-gray-600 border-gray-500 text-teal-500 focus:ring-teal-500"></td>`;
+                }).join('');
+
+                // Action buttons
+                tableHTML += `
+                    <td class="p-2 text-right">
+                        <div class="flex items-center justify-end gap-3">
+                            <button class="text-gray-400 hover:text-white transition edit-habit-btn" aria-label="Edit habit">${editIcon}</button>
+                            <button class="text-gray-400 hover:text-white transition delete-habit-btn" aria-label="Delete habit">${deleteIcon}</button>
+                        </div>
+                    </td>
+                `;
+
+                tableHTML += `</tr>`;
+            });
+
+            tableHTML += `</tbody></table>`;
+            habitsList.innerHTML = tableHTML;
+        }
+
+        function renderDailyTasks(day, tasks) {
+            let dayCard = document.getElementById(`day-card-${day}`);
+            if (!dayCard) {
+                dayCard = document.createElement('div');
+                dayCard.id = `day-card-${day}`;
+                dayCard.className = 'bg-gray-800 p-4 rounded-lg shadow-lg flex flex-col day-card';
+                dailyTasksContainer.appendChild(dayCard);
+            }
+
+            dayCard.innerHTML = `
+                <h3 class="text-xl font-bold mb-3 text-amber-300">${day}</h3>
+                <form class="flex gap-2 mb-3">
+                    <input type="text" placeholder="New task..." class="flex-grow bg-gray-700 text-white rounded-md px-3 py-1 border border-gray-600 focus:ring-2 focus:ring-amber-500 focus:outline-none transition task-input">
+                    <button type="submit" class="bg-amber-600 hover:bg-amber-700 text-white font-semibold px-3 py-1 rounded-md transition add-btn">Add</button>
+                </form>
+                <ul class="space-y-2 flex-grow overflow-y-auto pr-1">
+                    ${tasks.length === 0 ? `<li class="text-gray-500 text-center pt-4">No tasks for ${day}.</li>` : ''}
+                    ${tasks.map(task => `
+                        <li data-id="${task.id}" class="flex items-center gap-2 bg-gray-700/50 p-2 rounded-md">
+                            <input type="checkbox" ${task.completed ? 'checked' : ''} class="h-4 w-4 rounded bg-gray-600 border-gray-500 text-amber-500 focus:ring-amber-500">
+                            <span class="flex-grow text-sm ${task.completed ? 'line-through text-gray-400' : ''}">${task.text}</span>
+                            <div class="flex items-center gap-2 ml-auto">
+                                <button class="text-gray-400 hover:text-white transition edit-task-btn" aria-label="Edit task">${editIcon.replace(/h-5 w-5/g, 'h-4 w-4')}</button>
+                                <button class="text-gray-400 hover:text-white transition delete-task-btn" aria-label="Delete task">${deleteIcon.replace(/h-5 w-5/g, 'h-4 w-4')}</button>
+                            </div>
+                        </li>
+                    `).join('')}
+                </ul>
+            `;
+            
+            // Re-attach event listeners for the new content
+            const form = dayCard.querySelector('form');
+            form.onsubmit = e => {
+                e.preventDefault();
+                const input = form.querySelector('input');
+                if (input.value.trim()) {
+                    addDailyTask(day, input.value.trim());
+                    input.value = '';
+                }
+            };
+        }
+        
+        // --- Firestore CUD Functions ---
+        
+        // Priorities
+        document.getElementById('add-priority-form').addEventListener('submit', e => {
+            e.preventDefault();
+            const input = document.getElementById('new-priority-input');
+            const text = input.value.trim();
+            if (text) {
+                addDoc(getPrioritiesCol(), { text, completed: false, createdAt: new Date() });
+                input.value = '';
+            }
+        });
+
+        // Habits
+        document.getElementById('add-habit-form').addEventListener('submit', e => {
+            e.preventDefault();
+            const input = document.getElementById('new-habit-input');
+            const name = input.value.trim();
+            if (name) {
+                addDoc(getHabitsCol(), { 
+                    name, 
+                    tracking: { mon: false, tue: false, wed: false, thu: false, fri: false, sat: false, sun: false },
+                    createdAt: new Date() 
+                });
+                input.value = '';
+            }
+        });
+        
+        habitsList.addEventListener('change', e => {
+            if (e.target.matches('input[type="checkbox"]')) {
+                const habitId = e.target.closest('tr').dataset.id;
+                const dayKey = e.target.dataset.day;
+                const isChecked = e.target.checked;
+                updateDoc(doc(getHabitsCol(), habitId), { [`tracking.${dayKey}`]: isChecked });
+            }
+        });
+
+        habitsList.addEventListener('click', e => {
+            const habitRow = e.target.closest('tr');
+            if (!habitRow) return;
+            const habitId = habitRow.dataset.id;
+
+            if(e.target.closest('.delete-habit-btn')) {
+                if(confirm('Are you sure you want to delete this habit?')) {
+                    deleteDoc(doc(getHabitsCol(), habitId));
+                }
+            } else if (e.target.closest('.edit-habit-btn')) {
+                const nameCell = habitRow.querySelector('.habit-name-cell');
+                const currentName = nameCell.textContent;
+                nameCell.innerHTML = `
+                    <input type="text" value="${currentName}" class="w-full bg-gray-600 text-white rounded-md px-2 py-1 border border-gray-500 task-input">
+                `;
+                const input = nameCell.querySelector('input');
+                input.focus();
+                input.onkeydown = (ev) => {
+                    if (ev.key === 'Enter') {
+                        updateDoc(doc(getHabitsCol(), habitId), { name: input.value });
+                    }
+                    if (ev.key === 'Escape') {
+                         nameCell.textContent = currentName; // Revert on escape
+                    }
+                };
+                 input.onblur = () => { // Revert if blurred without saving
+                    if(document.body.contains(input)) {
+                       nameCell.textContent = currentName;
+                    }
+                 };
+            }
+        });
+        
+        // Daily Tasks
+        async function updateDailyTasks(day, updateFunction) {
+            const dayDocRef = doc(getDailyPlannerCol(), day);
+            try {
+                const dayDoc = await getDoc(dayDocRef);
+                if (dayDoc.exists()) {
+                    const currentTasks = dayDoc.data().tasks || [];
+                    const newTasks = updateFunction(currentTasks);
+                    await updateDoc(dayDocRef, { tasks: newTasks });
+                }
+            } catch (error) {
+                console.error(`Error updating tasks for ${day}:`, error);
+            }
+        }
+        
+        function addDailyTask(day, text) {
+            updateDailyTasks(day, tasks => [...tasks, { id: crypto.randomUUID(), text, completed: false }]);
+        }
+
+        dailyTasksContainer.addEventListener('click', async e => {
+            const taskLi = e.target.closest('li[data-id]');
+            if (!taskLi) return;
+
+            const taskId = taskLi.dataset.id;
+            const day = taskLi.closest('.day-card').id.replace('day-card-', '');
+            
+            // Checkbox toggle
+            if (e.target.matches('input[type="checkbox"]')) {
+                const isChecked = e.target.checked;
+                updateDailyTasks(day, tasks => tasks.map(t => t.id === taskId ? { ...t, completed: isChecked } : t));
+            }
+            // Delete button
+            else if (e.target.closest('.delete-task-btn')) {
+                updateDailyTasks(day, tasks => tasks.filter(t => t.id !== taskId));
+            }
+            // Edit button
+            else if (e.target.closest('.edit-task-btn')) {
+                const textSpan = taskLi.querySelector('span');
+                const currentText = textSpan.textContent;
+                
+                textSpan.innerHTML = `<input type="text" value="${currentText}" class="w-full bg-gray-600 text-white rounded-md px-2 py-1 border border-gray-500 text-sm task-input">`;
+                const input = textSpan.querySelector('input');
+                input.focus();
+
+                const save = () => {
+                    const newText = input.value.trim();
+                    if (newText) {
+                         updateDailyTasks(day, tasks => tasks.map(t => t.id === taskId ? { ...t, text: newText } : t));
+                    }
+                };
+                
+                input.onkeydown = (ev) => { if (ev.key === 'Enter') save(); };
+                input.onblur = save; // Save when focus is lost
+            }
+        });
+
+        // --- Initial Load ---
+        document.addEventListener('DOMContentLoaded', () => {
+            DAYS_OF_WEEK.forEach(day => renderDailyTasks(day, [])); // Initial render with empty state
+            authenticateUser();
+        });
+
+    </script>
+</body>
+</html>
+
+
